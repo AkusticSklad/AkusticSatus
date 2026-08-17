@@ -9,7 +9,7 @@ Aplikacja, która pokazuje aktualnie odtwarzaną linijkę tekstu piosenki (Spoti
 
 Ten plik to instrukcja **dla osoby, która pobrała gotowe `.exe`** — jak odpalić program, skonfigurować go pierwszy raz i zdobyć potrzebne tokeny/klucze. To nie jest dokumentacja kodu.
 
-\---
+
 
 ## 1\. Wymagania
 
