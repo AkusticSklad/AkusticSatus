@@ -17,7 +17,7 @@ Ten plik to instrukcja **dla osoby, która pobrała gotowe `.exe`** — jak odpa
 * Konto Discord (do statusu Rich Presence) — Discord musi być uruchomiony w tle.
 * Konto Spotify (jeśli chcesz obsługi Spotify) — **działa też na koncie darmowym**, Spotify Web API nie wymaga Premium do samego odczytu/sterowania odtwarzaniem w większości przypadków, ale niektóre akcje sterujące wymagają aktywnego urządzenia z odtwarzaczem.
 * (Opcjonalnie) [YouTube Music Desktop App](https://ytmdesktop.app/) z włączonym lokalnym API, jeśli chcesz obsługi YouTube Music zamiast/obok Spotify.
-* (Opcjonalnie) Tasker / Skróty na telefonie, jeśli chcesz przesyłać "co gra" z telefonu.
+* (Opcjonalnie) AkusticStatus.apk na telefonie, jeśli chcesz przesyłać "co gra" na telefonu.
 
 ## 2\. Pierwsze uruchomienie
 
@@ -27,11 +27,11 @@ Ten plik to instrukcja **dla osoby, która pobrała gotowe `.exe`** — jak odpa
 
    * Windows: `%LOCALAPPDATA%\\AcusticSquad\\Liryc`
 
-   Tam trzymane są: `settings.json` (Twoja konfiguracja), `spotify\_token.json` (tokeny Spotify) oraz kod parowania telefonu. Folder możesz szybko otworzyć przyciskiem w panelu WWW ("Otwórz folder z danymi").
+   Tam trzymane są: `settings.json` (Twoja konfiguracja), `spotify\_token.json` (tokeny Spotify) oraz kod parowania telefonu. Folder możesz szybko otworzyć przyciskiem w panelu ("Otwórz folder z danymi").
 
 4. Jeśli nie uzupełnisz jeszcze żadnych kluczy — program mimo to się uruchomi, po prostu status na Discordzie i pobieranie muzyki nie zadziałają, dopóki nie wykonasz konfiguracji poniżej.
 
-## 3\. Pierwsza konfiguracja (panel WWW → zakładka „⚙️ Ustawienia”)
+## 3\. Pierwsza konfiguracja (zakładka „⚙️ Ustawienia”)
 
 Po uruchomieniu aplikacji przejdź do zakładki **Ustawienia**. Będziesz tam wklejać dwa rodzaje danych:
 
@@ -44,7 +44,7 @@ W tej samej zakładce znajdziesz też:
 
 * wybór motywu kolorystycznego panelu,
 * tryb wyświetlania kolejki/następnego utworu (tylko Spotify),
-* **kod parowania telefonu** (do appki-pilota),
+* **kod parowania telefonu** (do AkusticStatus.apk),
 * adres IP komputera w sieci lokalnej i port panelu (przydatne przy konfiguracji telefonu),
 * przycisk do szybkiego otwarcia folderu z danymi aplikacji.
 
@@ -122,7 +122,7 @@ Działa automatycznie, gdy program jest uruchomiony — nic nie trzeba konfiguro
 |8888|Lokalny callback logowania Spotify (tylko podczas autoryzacji)|
 |26538|Połączenie z YouTube Music Desktop App|
 |47474|Lokalne API dla moda do Minecrafta|
-|47475|Odbiornik danych z telefonu (token / appka-pilot)|
+|47475|Odbiornik danych z telefonu (AkusticStatus.apk)|
 
 Jeśli któryś port jest zajęty przez inny program, dana funkcja może nie zadziałać — zamknij aplikację blokującą port albo zmień port w kodzie źródłowym.
 
