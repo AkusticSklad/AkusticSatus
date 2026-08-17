@@ -707,18 +707,38 @@ async def _spotify_control_local_windows_async(action):
 
 def _macos_run_osascript(script):
     """Uruchamia skrypt AppleScript przez osascript i zwraca jego stdout
-    (bez końcowej nowej linii), albo None przy błędzie/braku osascript."""
+    (bez końcowej nowej linii), albo None przy błędzie/braku osascript.
+    Błąd (stderr / wyjątek) loguje do konsoli, żeby dało się zdiagnozować
+    problemy z uprawnieniami do automatyzacji albo z samym skryptem."""
     try:
         result = _subprocess.run(
             ["osascript", "-e", script],
             capture_output=True, text=True, timeout=4,
         )
-    except Exception:
+    except Exception as exc:
+        print(f"[spotify-lokalny-mac] Nie udało się uruchomić osascript: {exc}")
         return None
     if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        print(f"[spotify-lokalny-mac] osascript zwrócił błąd: {err}")
         return None
     return result.stdout.strip()
 
+# WAŻNE #1: "player position" w Spotify AppleScript to liczba zmiennoprzecinkowa,
+# a jej konwersja "as string" używa SEPARATORA DZIESIĘTNEGO Z USTAWIEŃ
+# REGIONALNYCH SYSTEMU (np. przy polskiej lokalizacji macOS da "12,345"
+# zamiast "12.345"). Parsowanie takiego tekstu jako float w Pythonie wtedy
+# się wywala, a to potrafiło objawiać się jako ciągłe skakanie pozycji do 0
+# (błąd parsowania -> fallback na 0.0 co każdy odczyt). Dlatego przesyłamy
+# zaokrąglone MILISEKUNDY jako liczby całkowite - bez separatora dziesiętnego.
+#
+# WAŻNE #2: do zaokrąglania używamy koercji typu "as integer", a NIE komendy
+# "round" ze Standard Additions - komendy dodatków (jak "round") potrafią się
+# nie rozwiązać poprawnie, gdy są wywołane wewnątrz "tell application Spotify"
+# (Spotify jako cel bloku ma pierwszeństwo przy rozpoznawaniu poleceń), co
+# kończyło się błędem wykonania całego skryptu i brakiem jakichkolwiek danych.
+# "as integer" to koercja typu wbudowana w rdzeń języka, więc działa zawsze,
+# niezależnie od tego, w czyim bloku "tell" się znajduje.
 _MACOS_NOW_PLAYING_SCRIPT = '''
 tell application "System Events"
     set spotifyRunning to (name of processes) contains "Spotify"
@@ -729,13 +749,13 @@ tell application "Spotify"
     if ps is "stopped" then return "STOPPED"
     set tName to name of current track
     set tArtist to artist of current track
-    set tDur to duration of current track
-    set tPos to player position
+    set tDurMs to (duration of current track) as integer
+    set tPosMs to ((player position) * 1000) as integer
     set artUrl to ""
     try
         set artUrl to artwork url of current track
     end try
-    return tName & "||" & tArtist & "||" & (tDur as string) & "||" & (tPos as string) & "||" & ps & "||" & artUrl
+    return tName & "||" & tArtist & "||" & (tDurMs as string) & "||" & (tPosMs as string) & "||" & ps & "||" & artUrl
 end tell
 '''
 
@@ -746,16 +766,21 @@ def _get_spotify_now_playing_local_macos():
     parts = out.split("||")
     if len(parts) < 5 or not parts[0]:
         return None
-    title, artist, dur_ms_str, pos_sec_str, ps = parts[0], parts[1], parts[2], parts[3], parts[4]
+    title, artist, dur_ms_str, pos_ms_str, ps = parts[0], parts[1], parts[2], parts[3], parts[4]
     art_url = parts[5] if len(parts) > 5 else ""
     try:
-        duration_sec = float(dur_ms_str) / 1000.0  # AppleScript zwraca duration w milisekundach
-    except ValueError:
-        duration_sec = 0.0
-    try:
-        position_sec = float(pos_sec_str)  # player position jest już w sekundach
-    except ValueError:
-        position_sec = 0.0
+        # Liczby całkowite (milisekundy) - bez separatora dziesiętnego, więc
+        # bezpieczne niezależnie od ustawień regionalnych. Usuwamy na wszelki
+        # wypadek ewentualny separator tysięcy, gdyby jednak się pojawił
+        # (np. "1,234" przy bardzo długich utworach na niektórych wersjach
+        # systemu), zamiast łapać wyjątek i fałszywie zerować pozycję.
+        duration_sec = int(dur_ms_str.replace(",", "").replace(".", "").strip() or 0) / 1000.0
+        position_sec = int(pos_ms_str.replace(",", "").replace(".", "").strip() or 0) / 1000.0
+    except (ValueError, AttributeError):
+        # Nie udało się sparsować czasu - lepiej pominąć ten odczyt (zwrócić
+        # None), żeby panel WWW zostawił ostatnią znaną, dobrą pozycję
+        # zamiast zeskakiwać do 0 i gubić synchronizację tekstu.
+        return None
     return {
         "track": title,
         "artist": artist,
