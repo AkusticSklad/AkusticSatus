@@ -1,0 +1,13 @@
+# Ignoruj Twój folder ze skryptami
+skrypt/
+
+# Ignoruj pliki tworzone automatycznie przez macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Ignoruj pliki tworzone automatycznie przez Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
