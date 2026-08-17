@@ -17,55 +17,17 @@ jako Discord Rich Presence, a jednocześnie:
     z rozkładem przybliżonym gdy nie ma prawdziwej synchronizacji,
   • obsługuje komendy z terminala: on/off (status na Discordzie), status,
     delay <sekundy> (ręczne przesunięcie tekstu) - dostępne tylko gdy skrypt
-    ma konsolę (przy zbudowanym .exe bez konsoli te same funkcje są w panelu WWW),
-  • odczytuje dane ze Spotify na dwa sposoby, wybierane w Ustawieniach:
-    "API" (Spotify Web API, wymaga Client ID/Secret, może dostać limit
-    zapytań 429 przy zbyt częstym odpytywaniu) albo "Lokalny" (bez
-    zapytań do Spotify - czyta dane wprost z systemu operacyjnego,
-    więc nie ma ryzyka błędu 429, ale wymaga otwartej aplikacji Spotify
-    na komputerze i nie obsługuje wyszukiwania/kolejki). Tryb "Lokalny"
-    działa na wszystkich trzech systemach, każdy przez inny mechanizm:
-      - Windows: systemowe "Centrum multimediów" (to samo źródło, z
-        którego korzysta pasek multimediów Windows) przez pakiet winsdk,
-      - macOS: bezpośrednio przez AppleScript/osascript (wbudowany w
-        system, nic dodatkowego nie trzeba instalować - wymaga tylko,
-        by aplikacja Spotify miała włączone "Zezwalaj na sterowanie
-        skryptami" w Ustawieniach systemowych -> Prywatność i
-        bezpieczeństwo -> Automatyzacja),
-      - Linux: przez MPRIS, standardowy interfejs D-Bus używany przez
-        Spotify na Linuxie oraz większość środowisk graficznych, przez
-        pakiet dbus-next.
+    ma konsolę (przy zbudowanym .exe bez konsoli te same funkcje są w panelu WWW).
 
 INSTALACJA:
     pip install requests pypresence cryptography syncedlyrics pywebview
-    pip install winsdk      # opcjonalnie, tylko Windows - tryb "Lokalny" Spotify
-    pip install dbus-next   # opcjonalnie, tylko Linux - tryb "Lokalny" Spotify (MPRIS)
-    # macOS: tryb "Lokalny" nie wymaga żadnego dodatkowego pakietu pip.
 
 URUCHOMIENIE (development, z konsolą):
     python statusik.py
 
-BUDOWANIE PLIKU WYKONYWALNEGO (PyInstaller buduje na tym systemie, na
-którym go uruchamiasz - nie da się z Windows zbudować appki dla macOS/Linux
-i odwrotnie; żeby mieć wszystkie trzy, trzeba uruchomić poniższe na
-komputerze z każdym z tych systemów):
+BUDOWANIE .EXE (patrz też komentarz na końcu pliku, sekcja "BUDOWANIE .EXE"):
     pip install pyinstaller
-
-    # Windows -> LyricStatus.exe
     pyinstaller --onefile --noconsole --name "LyricStatus" statusik.py
-
-    # macOS -> LyricStatus.app (--windowed = brak okna terminala, jak --noconsole)
-    pyinstaller --onefile --windowed --name "LyricStatus" statusik.py
-
-    # Linux -> plik wykonywalny "LyricStatus" (konsola i tak jest niewidoczna,
-    # bo aplikacja odpala własne okno pywebview/przeglądarkę - --noconsole nie
-    # jest tu wspierane przez PyInstaller, więc po prostu nie dodajemy tej flagi)
-    pyinstaller --onefile --name "LyricStatus" statusik.py
-
-Każda z powyższych komend, uruchomiona z zainstalowanymi bibliotekami z
-sekcji INSTALACJA (winsdk / dbus-next, w zależności od systemu), sama
-zapakuje te biblioteki do środka pliku wykonywalnego - patrz pytanie 2
-w komentarzu na końcu pliku po więcej szczegółów.
 """
 
 import base64
@@ -175,8 +137,7 @@ DEFAULT_SETTINGS = {
     "PRESENCE_ENABLED": True,
     "DISPLAY_MODE": "none",
     "QUEUE_COUNT": 5,
-    "LYRIC_LINE_MODE": "single",
-    "SPOTIFY_MODE": "api"
+    "LYRIC_LINE_MODE": "single"
 }
 
 _migrate_legacy_file(".settings.json", SETTINGS_FILE)
@@ -236,25 +197,6 @@ WINDOW_HEIGHT = 890
 WINDOW_RESIZABLE = True
 
 # ============================================================
-# LOKALNA OKŁADKA ZASTĘPCZA (bez zapytań do sieci)
-# ============================================================
-# Wcześniej jako "brak okładki" używany był zewnętrzny obrazek z
-# via.placeholder.com. Ten serwis bywa niedostępny/wolny, a że okładka
-# jest odświeżana co 500ms w panelu WWW, powtarzające się nieudane
-# wczytywanie obrazka z sieci powodowało widoczne "miganie" okładki
-# (pojawia się/znika) i zacinanie się całego okna, przez co trudno było
-# trafić kliknięciem w zakładkę Ustawienia. Poniższy obrazek jest
-# wbudowany w kod (data URI) - wczytuje się natychmiast, bez sieci,
-# więc nie ma już czego "migać".
-NO_COVER_DATA_URI = (
-    "data:image/svg+xml;utf8,"
-    "%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 300 300%27%3E"
-    "%3Crect width=%27300%27 height=%27300%27 rx=%2720%27 fill=%27%232a2a3a%27/%3E"
-    "%3Ctext x=%27150%27 y=%27160%27 font-size=%2790%27 text-anchor=%27middle%27 fill=%27%23555569%27%3E%E2%99%AB%3C/text%3E"
-    "%3C/svg%3E"
-)
-
-# ============================================================
 # STAN GLOBALNY APLIKACJI
 # ============================================================
 state_lock = threading.Lock()
@@ -264,7 +206,7 @@ app_state = {
     "line": "🎵 Uruchom utwór na Spotify / YouTube Music / telefonie",
     "next_line": "",
     "is_playing": False,
-    "cover_url": NO_COVER_DATA_URI,
+    "cover_url": "https://via.placeholder.com/300?text=Brak+Muzyki",
     "active_source": None,
     "status_discord": False,
     "status_spotify": False,
@@ -553,6 +495,7 @@ def get_spotify_queue(limit=5):
 
 
 # ============================================================
+<<<<<<< Updated upstream
 # SPOTIFY - TRYB LOKALNY (bez Web API, bez limitu 429)
 # ============================================================
 # Ten tryb w ogóle nie wysyła zapytań do serwerów Spotify - zamiast tego
@@ -949,6 +892,8 @@ def spotify_control_dispatch(action):
 
 
 # ============================================================
+=======
+>>>>>>> Stashed changes
 # YOUTUBE MUSIC
 # ============================================================
 _YTM_BASE_URL = f"http://{YTMDESKTOP_HOST}:{YTMDESKTOP_PORT}"
@@ -1151,7 +1096,7 @@ class _PhoneReceiverHTTPHandler(BaseHTTPRequestHandler):
         if target == "spotify":
             if action == "search": result = spotify_search(command.get("query", ""))
             elif action == "play_track": result = spotify_play_track(command.get("uri", ""))
-            else: result = spotify_control_dispatch(action)
+            else: result = spotify_control(action)
         elif target == "youtube":
             if action == "search": result = youtube_search(command.get("query", ""))
             else: result = youtube_control(action)
@@ -1452,7 +1397,7 @@ def get_lyric_offset_seconds():
 # GŁÓWNA PĘTLA
 # ============================================================
 _SOURCES = {
-    "spotify": get_spotify_now_playing_dispatch,
+    "spotify": get_spotify_now_playing,
     "youtube": get_youtube_now_playing,
     "phone": get_phone_now_playing,
 }
@@ -1510,11 +1455,9 @@ def background_loop():
                     active_source=active_source,
                 )
 
-            # --- Wyświetlanie następnego utworu / kolejki (tylko Spotify, tylko tryb API) ---
-            # Windows nie udostępnia informacji o kolejce, więc w trybie lokalnym
-            # ta funkcja jest niedostępna (i nie warto przez nią dodatkowo odpytywać API).
+            # --- Wyświetlanie następnego utworu / kolejki (tylko Spotify) ---
             display_mode = current_settings.get("DISPLAY_MODE", "none")
-            if display_mode != "none" and active_source == "spotify" and get_spotify_mode() == "api":
+            if display_mode != "none" and active_source == "spotify":
                 if (now - last_queue_poll_time) >= QUEUE_POLL_INTERVAL_SECONDS:
                     last_queue_poll_time = now
                     if display_mode == "next":
@@ -1541,7 +1484,7 @@ def background_loop():
                     line="🎵 ...",
                     next_line="",
                     is_playing=False,
-                    cover_url=NO_COVER_DATA_URI,
+                    cover_url="https://via.placeholder.com/300?text=Brak+Muzyki",
                     position_sec=0.0,
                     duration_sec=0.0,
                 )
@@ -1595,7 +1538,7 @@ def background_loop():
                 line=line_for_display,
                 next_line=next_line_for_display,
                 is_playing=bool(snapshot.get("is_playing")),
-                cover_url=cover_url or NO_COVER_DATA_URI,
+                cover_url=cover_url or "https://via.placeholder.com/300?text=Brak+Okładki",
                 position_sec=position,
                 duration_sec=duration,
             )
@@ -2127,7 +2070,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         <!-- ZAKŁADKA 1: ODTWARZACZ -->
         <div id="tab-player" class="tab-content active">
-            <img id="cover" src="__NO_COVER_DATA_URI__" alt="Cover" onerror="this.onerror=null;this.src='__NO_COVER_DATA_URI__';">
+            <img id="cover" src="https://via.placeholder.com/300?text=Brak+Okładki" alt="Cover">
             <div class="lyric" id="lyric">Ładowanie...</div>
             <div class="lyric-second" id="lyricSecond"></div>
             <div class="track" id="track">-</div>
@@ -2161,25 +2104,6 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="pill"><span>YouTube Music</span> <span id="st-ytm">🌑</span></div>
                 <div class="pill"><span>Telefon</span> <span id="st-phone">🌑</span></div>
                 <div class="pill"><span>Discord</span> <span id="st-discord">🌑</span></div>
-            </div>
-
-            <!-- Sposób łączenia ze Spotify (API vs lokalny) -->
-            <div class="card">
-                <h4>Połączenie ze Spotify</h4>
-                <div class="theme-picker" style="grid-template-columns: 1fr 1fr;">
-                    <button class="theme-option" data-spotifymode-btn="api" onclick="setSpotifyMode('api')">
-                        API (online)
-                    </button>
-                    <button class="theme-option" data-spotifymode-btn="local" id="spotifyModeLocalBtn" onclick="setSpotifyMode('local')">
-                        Lokalny (Windows)
-                    </button>
-                </div>
-                <p style="font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.5; margin-top: 8px;" id="spotifyModeHint">
-                    "API" łączy się z serwerami Spotify - przy bardzo częstym sprawdzaniu może dostać
-                    chwilowy limit zapytań (błąd 429). "Lokalny" czyta dane wprost z komputera
-                    (Windows, gdy Spotify jest otwarte) i nigdy nie dostaje limitu 429, ale nie
-                    obsługuje wyszukiwania ani podglądu kolejki.
-                </p>
             </div>
 
             <!-- Discord RPC -->
@@ -2299,8 +2223,6 @@ HTML_PAGE = """<!DOCTYPE html>
         let currentTheme = 'pink';
         let lastCustomColor = '#3B82F6';
         let lyricLineMode = 'single';
-        let spotifyMode = 'api';
-        let spotifyLocalAvailable = null; // null = jeszcze nie wiadomo (przed pierwszym /state)
 
         function switchTab(tabName) {
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -2331,13 +2253,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     document.getElementById('lyric').innerText = data.line;
                     document.getElementById('track').innerText = data.track;
                     document.getElementById('artist').innerText = data.artist;
-                    // Podmieniamy src okładki TYLKO gdy faktycznie się zmieniła - ustawianie
-                    // tej samej wartości co 500ms powodowało miganie/zacinanie się okna
-                    // (patrz NO_COVER_DATA_URI w kodzie Pythona).
-                    const coverEl = document.getElementById('cover');
-                    if (data.cover_url && coverEl.src !== data.cover_url) {
-                        coverEl.src = data.cover_url;
-                    }
+                    document.getElementById('cover').src = data.cover_url;
                     document.getElementById('playBtn').innerText = data.is_playing ? "⏸ Pauza" : "▶ Start";
 
                     // Druga linijka tekstu (podgląd kolejnej linijki) - pokazywana
@@ -2345,18 +2261,6 @@ HTML_PAGE = """<!DOCTYPE html>
                     if (data.lyric_line_mode && data.lyric_line_mode !== lyricLineMode) {
                         lyricLineMode = data.lyric_line_mode;
                         applyLyricLineModeButtons(lyricLineMode);
-                    }
-
-                    // Sposób łączenia ze Spotify (API / lokalny) + czy lokalny w ogóle
-                    // jest dostępny na tym komputerze (Windows+winsdk, macOS+osascript
-                    // albo Linux+dbus-next - zależnie od systemu)
-                    if (data.spotify_local_available !== undefined && data.spotify_local_available !== spotifyLocalAvailable) {
-                        spotifyLocalAvailable = data.spotify_local_available;
-                        applySpotifyModeAvailability(spotifyLocalAvailable);
-                    }
-                    if (data.spotify_mode && data.spotify_mode !== spotifyMode) {
-                        spotifyMode = data.spotify_mode;
-                        applySpotifyModeButtons(spotifyMode);
                     }
                     const lyricSecondEl = document.getElementById('lyricSecond');
                     if (lyricLineMode === 'double' && data.next_line) {
@@ -2426,7 +2330,7 @@ HTML_PAGE = """<!DOCTYPE html>
             const items = queue.slice(0, limit);
             wrap.innerHTML = items.map((t, idx) => {
                 const label = mode === 'queue' ? ('W kolejce #' + (idx + 1)) : 'Następny utwór';
-                const cover = t.cover_url || '__NO_COVER_DATA_URI__';
+                const cover = t.cover_url || 'https://via.placeholder.com/60?text=%E2%99%AB';
                 return `
                     <div class="next-pill">
                         <img src="${cover}" alt="">
@@ -2501,49 +2405,6 @@ HTML_PAGE = """<!DOCTYPE html>
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ LYRIC_LINE_MODE: mode })
-            }).catch(err => console.log(err));
-        }
-
-        // --- Sposób łączenia ze Spotify: "api" (Web API) albo "local" (bez limitu 429) ---
-        // Tryb "local" działa na Windows (winsdk), macOS (osascript) i Linux (dbus-next).
-        function applySpotifyModeButtons(mode) {
-            document.querySelectorAll('[data-spotifymode-btn]').forEach(el => {
-                el.classList.toggle('active', el.dataset.spotifymodeBtn === mode);
-            });
-        }
-
-        function applySpotifyModeAvailability(available) {
-            const btn = document.getElementById('spotifyModeLocalBtn');
-            const hint = document.getElementById('spotifyModeHint');
-            if (!btn) return;
-            if (available) {
-                btn.disabled = false;
-                btn.style.opacity = '';
-                btn.title = '';
-            } else {
-                btn.disabled = true;
-                btn.style.opacity = '0.4';
-                btn.title = 'Niedostępne na tym komputerze (brakuje wymaganego pakietu albo system nie jest wspierany)';
-                if (hint) {
-                    hint.innerText = 'Tryb "Lokalny" jest niedostępny na tym komputerze - na Windows wymaga ' +
-                        'pakietu winsdk, na Linuxie pakietu dbus-next, na macOS uprawnień do automatyzacji ' +
-                        'Spotify przez AppleScript. Aktualnie działa tryb "API".';
-                }
-            }
-        }
-
-        function setSpotifyMode(mode) {
-            if (mode === 'local' && spotifyLocalAvailable === false) {
-                alert('Tryb "Lokalny" jest niedostępny na tym komputerze - na Windows wymaga pakietu winsdk, ' +
-                      'na Linuxie pakietu dbus-next, na macOS uprawnień do automatyzacji Spotify (AppleScript).');
-                return;
-            }
-            spotifyMode = mode;
-            applySpotifyModeButtons(mode);
-            fetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ SPOTIFY_MODE: mode })
             }).catch(err => console.log(err));
         }
 
@@ -2701,7 +2562,6 @@ class WebServerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             initial_theme = current_settings.get("THEME", "pink")
             page = HTML_PAGE.replace("__INITIAL_THEME__", initial_theme)
-            page = page.replace("__NO_COVER_DATA_URI__", NO_COVER_DATA_URI)
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
@@ -2722,8 +2582,6 @@ class WebServerHandler(BaseHTTPRequestHandler):
             data["queue_count"] = current_settings.get("QUEUE_COUNT", 5)
             data["lyric_line_mode"] = current_settings.get("LYRIC_LINE_MODE", "single")
             data["app_data_dir"] = APP_DATA_DIR
-            data["spotify_mode"] = current_settings.get("SPOTIFY_MODE", "api")
-            data["spotify_local_available"] = SPOTIFY_LOCAL_AVAILABLE
             # ------------------------------------------
 
             self.send_response(200)
@@ -2743,7 +2601,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                 is_play = app_state["is_playing"]
 
             cmd = ("pause" if is_play else "play") if action == "toggle" else action
-            if active == "spotify": threading.Thread(target=spotify_control_dispatch, args=(cmd,)).start()
+            if active == "spotify": threading.Thread(target=spotify_control, args=(cmd,)).start()
             elif active == "youtube": threading.Thread(target=youtube_control, args=(cmd,)).start()
 
             self.send_response(200)
