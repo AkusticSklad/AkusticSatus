@@ -137,7 +137,8 @@ DEFAULT_SETTINGS = {
     "PRESENCE_ENABLED": True,
     "DISPLAY_MODE": "none",
     "QUEUE_COUNT": 5,
-    "LYRIC_LINE_MODE": "single"
+    "LYRIC_LINE_MODE": "single",
+    "SPOTIFY_MODE": "native"
 }
 
 _migrate_legacy_file(".settings.json", SETTINGS_FILE)
@@ -350,7 +351,9 @@ def _spotify_auth_header():
     _spotify_refresh_if_needed()
     return {"Authorization": f"Bearer {_spotify_tokens['access_token']}"} if _spotify_tokens else {}
 
-def get_spotify_now_playing():
+def _spotify_now_playing_webapi():
+    """Stary tryb: odpytuje Spotify Web API (podatny na limit 429 przy
+    dłuższym działaniu). Używany tylko jako fallback - patrz get_spotify_now_playing()."""
     global _spotify_backoff_until
     if _spotify_tokens is None:
         _spotify_load_tokens()
@@ -403,6 +406,319 @@ def get_spotify_now_playing():
         "is_playing": data.get("is_playing", False),
         "cover_url": cover_url,
     }
+
+# ============================================================
+# NATYWNY ODCZYT "CO GRA" BEZPOŚREDNIO Z APLIKACJI SPOTIFY
+# (macOS: AppleScript / Windows: tytuł okna + UI Automation)
+# ------------------------------------------------------------
+# Zamiast pytać Spotify Web API co POLL_INTERVAL_SECONDS (co przy
+# dłuższym działaniu programu potrafiło skończyć się limitem 429),
+# rozmawiamy bezpośrednio z lokalnie działającą aplikacją Spotify.
+# Web API zostaje tylko do sterowania (play/pause/next) i kolejki -
+# to są rzadkie, pojedyncze zapytania, które nie powodują limitu.
+# ============================================================
+
+_SPOTIFY_NATIVE_WARNED = False
+_SPOTIFY_TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+_COVER_LOOKUP_CACHE = {}
+_COVER_LOOKUP_CACHE_MAX = 300
+
+
+def _fetch_cover_online(track, artist):
+    """Dogrywa okładkę utworu z Deezer (publiczne, darmowe API - bez klucza,
+    bez logowania) - używane, gdy tryb natywny (np. Windows przez UI
+    Automation) sam nie potrafi dostarczyć URL-a okładki. Wynik jest
+    cache'owany per (utwór, artysta), więc Deezer jest odpytywany raz na
+    zmianę utworu, a nie przy każdym pollu."""
+    key = (track or "", artist or "")
+    if key in _COVER_LOOKUP_CACHE:
+        return _COVER_LOOKUP_CACHE[key]
+
+    cover_url = None
+    try:
+        query = f"{artist} {track}".strip()
+        resp = _session.get(
+            "https://api.deezer.com/search",
+            params={"q": query, "limit": 1},
+            timeout=4,
+        )
+        if resp.status_code == 200:
+            items = (resp.json() or {}).get("data") or []
+            if items:
+                album = items[0].get("album") or {}
+                cover_url = album.get("cover_big") or album.get("cover_medium") or album.get("cover")
+    except requests.RequestException as exc:
+        print(f"[cover] Błąd pobierania okładki z Deezer: {exc}")
+    except Exception as exc:
+        print(f"[cover] Błąd przetwarzania odpowiedzi Deezer: {exc}")
+
+    if len(_COVER_LOOKUP_CACHE) >= _COVER_LOOKUP_CACHE_MAX:
+        _COVER_LOOKUP_CACHE.pop(next(iter(_COVER_LOOKUP_CACHE)))
+    _COVER_LOOKUP_CACHE[key] = cover_url
+    return cover_url
+
+
+def _spotify_native_available():
+    """Sprawdza, czy da się użyć natywnego odczytu na tym systemie."""
+    if sys.platform == "darwin":
+        return True  # osascript jest wbudowany w macOS
+    if sys.platform == "win32":
+        try:
+            import uiautomation  # noqa: F401
+            return True
+        except ImportError:
+            return False
+    return False
+
+
+# --------------------- macOS: AppleScript ---------------------
+
+def _spotify_native_macos():
+    """Pyta bezpośrednio aplikację Spotify (AppleScript / osascript) o to,
+    co aktualnie gra. Oficjalnie wspierane API samej appki, więc pozycja
+    utworu jest zawsze aktualna i dokładna - bez zapytań sieciowych."""
+    import subprocess
+
+    delim = "\x1f"  # unit separator - praktycznie nie występuje w nazwach utworów
+    script = (
+        'if application "Spotify" is running then\n'
+        '    tell application "Spotify"\n'
+        '        set playerState to player state as string\n'
+        '        if playerState is "stopped" then\n'
+        '            return "STOPPED"\n'
+        '        end if\n'
+        '        set trackName to name of current track\n'
+        '        set trackArtist to artist of current track\n'
+        '        set trackDuration to duration of current track\n'
+        '        set trackPosition to player position\n'
+        '        set trackArt to artwork url of current track\n'
+        f'        return playerState & (ASCII character 31) & trackName & (ASCII character 31) & trackArtist & (ASCII character 31) & (trackDuration as string) & (ASCII character 31) & (trackPosition as string) & (ASCII character 31) & trackArt\n'
+        '    end tell\n'
+        'else\n'
+        '    return "NOTRUNNING"\n'
+        'end if\n'
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception as exc:
+        print(f"[spotify-mac] Błąd wywołania AppleScript: {exc}")
+        return None
+
+    out = (result.stdout or "").strip()
+    if not out or out in ("NOTRUNNING", "STOPPED"):
+        return None
+
+    parts = out.split(delim)
+    if len(parts) < 6:
+        return None
+
+    state, track, artist, duration_ms_str, position_sec_str, art_url = parts[:6]
+    try:
+        duration_sec = float(duration_ms_str) / 1000.0
+    except ValueError:
+        duration_sec = 0.0
+    try:
+        position_sec = float(position_sec_str)
+    except ValueError:
+        position_sec = 0.0
+
+    return {
+        "track": track,
+        "artist": artist,
+        "duration_sec": duration_sec,
+        "position_sec": position_sec,
+        "is_playing": state == "playing",
+        "cover_url": art_url or None,
+    }
+
+
+# --------------------- Windows: tytuł okna + UI Automation ---------------------
+
+def _spotify_native_windows_find_window():
+    """Szuka głównego, widocznego okna procesu Spotify.exe i zwraca jego
+    uchwyt (hwnd) oraz tytuł. Tytuł okna Spotify na Windowsie to "Artist -
+    Utwór" w trakcie odtwarzania, a sama nazwa "Spotify" (bez myślnika),
+    gdy nic nie gra / jest pauza - to zachowanie appki jest stabilne od lat
+    (korzysta z niego wiele podobnych narzędzi "now playing")."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    psapi = ctypes.windll.psapi
+
+    found = {"hwnd": None, "title": None}
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _enum_proc(hwnd, lparam):
+        if found["hwnd"] is not None:
+            return True
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h_process = kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)
+        if not h_process:
+            return True
+        try:
+            exe_buf = ctypes.create_unicode_buffer(260)
+            psapi.GetModuleBaseNameW(h_process, None, exe_buf, 260)
+            exe_name = exe_buf.value
+        finally:
+            kernel32.CloseHandle(h_process)
+
+        if exe_name.lower() == "spotify.exe":
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            found["hwnd"] = hwnd
+            found["title"] = buf.value
+        return True
+
+    user32.EnumWindows(_enum_proc, 0)
+    return found["hwnd"], found["title"]
+
+
+def _spotify_native_windows_progress(hwnd):
+    """Best-effort: przeszukuje drzewo UI Automation okna Spotify w
+    poszukiwaniu dwóch "etykiet czasu" (np. "1:23" i "3:45") stojących
+    przy pasku postępu - to elapsed/duration. Zwraca (position_sec,
+    duration_sec) albo (None, None), jeśli się nie uda (np. brak
+    biblioteki `uiautomation` albo Spotify zmieniło coś w UI)."""
+    try:
+        import uiautomation as auto
+    except ImportError:
+        return None, None
+
+    try:
+        window = auto.ControlFromHandle(hwnd)
+    except Exception:
+        return None, None
+    if not window:
+        return None, None
+
+    found = []
+    visited = [0]
+    MAX_NODES = 4000
+    MAX_DEPTH = 40
+
+    def _walk(control, depth):
+        if len(found) >= 2 or visited[0] >= MAX_NODES or depth > MAX_DEPTH:
+            return
+        visited[0] += 1
+        try:
+            name = control.Name
+        except Exception:
+            name = None
+        if name and _SPOTIFY_TIME_RE.match(name):
+            found.append(name)
+            if len(found) >= 2:
+                return
+        try:
+            children = control.GetChildren()
+        except Exception:
+            children = []
+        for child in children:
+            _walk(child, depth + 1)
+            if len(found) >= 2:
+                return
+
+    try:
+        _walk(window, 0)
+    except Exception:
+        return None, None
+
+    if len(found) < 2:
+        return None, None
+
+    def _to_sec(txt):
+        m, s = txt.split(":")
+        return int(m) * 60 + int(s)
+
+    return _to_sec(found[0]), _to_sec(found[1])
+
+
+def _spotify_native_windows():
+    """Odczyt "co gra" na Windowsie bez Spotify Web API: tytuł okna daje
+    utwór/artystę/czy gra, a UI Automation (jeśli dostępne) dobiera
+    pozycję/długość utworu z etykiet czasu przy pasku postępu. Okładka nie
+    jest tu dostępna (Chromium nie ujawnia URL obrazka przez UI Automation)
+    - front zamiast niej pokaże lokalny placeholder (patrz zmiana z okładką)."""
+    hwnd, title = _spotify_native_windows_find_window()
+    if not hwnd or not title:
+        return None
+
+    title = title.strip()
+    if not title or title.lower() in ("spotify", "spotify premium", "spotify free"):
+        return None  # nic nie gra / pauza bez wznowienia
+
+    if " - " not in title:
+        return None
+
+    artist, _, track = title.partition(" - ")
+    artist = artist.strip()
+    track = track.strip()
+    if not track:
+        return None
+
+    position_sec, duration_sec = _spotify_native_windows_progress(hwnd)
+    cover_url = _fetch_cover_online(track, artist)
+
+    return {
+        "track": track,
+        "artist": artist,
+        "duration_sec": float(duration_sec or 0),
+        "position_sec": float(position_sec or 0),
+        "is_playing": True,
+        "cover_url": cover_url,
+    }
+
+
+def get_spotify_now_playing():
+    """Punkt wejścia używany przez resztę appki: odczytuje co gra w Spotify.
+    Zależnie od ustawienia SPOTIFY_MODE ("native" / "api"):
+      - "native" (domyślnie): łączy się BEZPOŚREDNIO z aplikacją Spotify
+        (AppleScript na macOS / tytuł okna + UI Automation na Windowsie) -
+        bez Spotify Web API, więc nie ma ryzyka limitu zapytań (429) przy
+        dłuższym działaniu programu.
+      - "api": wymusza stary tryb przez Spotify Web API (przydatne np. gdy
+        natywny odczyt nie działa poprawnie na czyimś komputerze).
+    Web API (_spotify_now_playing_webapi) jest też automatycznym fallbackiem
+    na Windowsie, gdy brakuje biblioteki `uiautomation` (pip install
+    uiautomation), niezależnie od wybranego trybu."""
+    global _SPOTIFY_NATIVE_WARNED
+
+    mode = current_settings.get("SPOTIFY_MODE", "native")
+    if mode == "api":
+        return _spotify_now_playing_webapi()
+
+    if sys.platform == "darwin":
+        return _spotify_native_macos()
+
+    if sys.platform == "win32":
+        if _spotify_native_available():
+            return _spotify_native_windows()
+        if not _SPOTIFY_NATIVE_WARNED:
+            print(
+                "[spotify] Brak biblioteki 'uiautomation' - zainstaluj: "
+                "pip install uiautomation. Na razie korzystam z awaryjnego "
+                "trybu przez Spotify Web API (może trafić na limit 429 "
+                "przy dłuższym działaniu)."
+            )
+            _SPOTIFY_NATIVE_WARNED = True
+        return _spotify_now_playing_webapi()
+
+    # inne systemy (np. Linux) - zostaje stary tryb przez Web API
+    return _spotify_now_playing_webapi()
+
 
 def spotify_control(action):
     method_and_path = {
@@ -1799,6 +2115,24 @@ HTML_PAGE = """<!DOCTYPE html>
                 <button class="small" style="width: 100%; margin-top: 6px;" onclick="openDataFolder()">Otwórz folder z danymi</button>
             </div>
 
+            <!-- Tryb połączenia ze Spotify -->
+            <div class="card">
+                <h4>Połączenie ze Spotify</h4>
+                <div class="theme-picker" style="grid-template-columns: 1fr 1fr;">
+                    <button class="theme-option" data-spotifymode-btn="native" onclick="setSpotifyMode('native')">
+                        Bezpośrednio z appki
+                    </button>
+                    <button class="theme-option" data-spotifymode-btn="api" onclick="setSpotifyMode('api')">
+                        Przez Spotify Web API
+                    </button>
+                </div>
+                <p style="font-size: 12px; opacity: 0.75; margin-top: 6px;">
+                    "Bezpośrednio z appki" (zalecane) - łączy się wprost z aplikacją Spotify
+                    na tym komputerze, bez limitu zapytań. "Przez Spotify Web API" wymaga
+                    kluczy poniżej i może po dłuższym działaniu trafić na limit zapytań (429).
+                </p>
+            </div>
+
             <!-- Formularz Kluczy API -->
             <div class="card">
                 <h4>Konfiguracja API</h4>
@@ -2025,6 +2359,22 @@ HTML_PAGE = """<!DOCTYPE html>
             }).catch(err => console.log(err));
         }
 
+        // --- Tryb połączenia ze Spotify: bezpośrednio z appki / przez Web API ---
+        function applySpotifyMode(mode) {
+            document.querySelectorAll('[data-spotifymode-btn]').forEach(el => {
+                el.classList.toggle('active', el.dataset.spotifymodeBtn === mode);
+            });
+        }
+
+        function setSpotifyMode(mode) {
+            applySpotifyMode(mode);
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ SPOTIFY_MODE: mode })
+            }).catch(err => console.log(err));
+        }
+
         function openDataFolder() {
             fetch('/open-data-folder').catch(err => console.log(err));
         }
@@ -2059,6 +2409,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
                     lyricLineMode = cfg.LYRIC_LINE_MODE || 'single';
                     applyLyricLineModeButtons(lyricLineMode);
+
+                    applySpotifyMode(cfg.SPOTIFY_MODE || 'native');
                 })
                 .catch(err => console.log(err));
         }
