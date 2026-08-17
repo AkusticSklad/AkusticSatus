@@ -68,7 +68,9 @@ Rich Presence na Discordzie wymaga własnej "aplikacji Discorda" (to nic nie kos
    * **Redirect URI** — wpisz dokładnie:
 
 ```
+
 http://127.0.0.1:8888/callback
+
 ```
 
      (to jest adres, na który program odbiera odpowiedź logowania — musi być identyczny co do znaku).
