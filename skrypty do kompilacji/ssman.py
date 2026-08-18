@@ -494,7 +494,9 @@ def _spotify_native_macos():
         '        set trackDuration to duration of current track\n'
         '        set trackPosition to player position\n'
         '        set trackArt to artwork url of current track\n'
-        f'        return playerState & (ASCII character 31) & trackName & (ASCII character 31) & trackArtist & (ASCII character 31) & (trackDuration as string) & (ASCII character 31) & (trackPosition as string) & (ASCII character 31) & trackArt\n'
+        '        set trackDurationMs to round trackDuration\n'
+        '        set trackPositionMs to round (trackPosition * 1000)\n'
+        f'        return playerState & (ASCII character 31) & trackName & (ASCII character 31) & trackArtist & (ASCII character 31) & (trackDurationMs as string) & (ASCII character 31) & (trackPositionMs as string) & (ASCII character 31) & trackArt\n'
         '    end tell\n'
         'else\n'
         '    return "NOTRUNNING"\n'
@@ -517,13 +519,17 @@ def _spotify_native_macos():
     if len(parts) < 6:
         return None
 
-    state, track, artist, duration_ms_str, position_sec_str, art_url = parts[:6]
+    state, track, artist, duration_ms_str, position_ms_str, art_url = parts[:6]
+    # UWAGA: obie wartości to całkowite milisekundy (AppleScript "round"),
+    # celowo NIE liczby rzeczywiste - "x as string" na macOS z polskim
+    # regionem zwracał ułamek z przecinkiem ("45,821"), co float() nie
+    # parsuje i powodowało zerowanie się pozycji (efekt "0,1,0,1 w kółko").
     try:
         duration_sec = float(duration_ms_str) / 1000.0
     except ValueError:
         duration_sec = 0.0
     try:
-        position_sec = float(position_sec_str)
+        position_sec = float(position_ms_str) / 1000.0
     except ValueError:
         position_sec = 0.0
 
