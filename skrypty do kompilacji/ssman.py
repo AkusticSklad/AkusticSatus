@@ -1,5 +1,5 @@
 """
-LYRIC STATUS - wersja POŁĄCZONA (statusik.py + lyric_status_light.py + ssman.py + sasana biją w domy.py)
+AkusticStatus - wersja POŁĄCZONA (statusik.py + lyric_status_light.py + ssman.py + sasana biją w domy.py)
 ======================================================================
 Pokazuje aktualną linijkę tekstu piosenki (Spotify / YouTube Music / telefon)
 jako Discord Rich Presence, a jednocześnie:
@@ -27,7 +27,7 @@ URUCHOMIENIE (development, z konsolą):
 
 BUDOWANIE .EXE (patrz też komentarz na końcu pliku, sekcja "BUDOWANIE .EXE"):
     pip install pyinstaller
-    pyinstaller --onefile --noconsole --name "LyricStatus" statusik.py
+    pyinstaller --onefile --noconsole --name "AkusticStatus" statusik.py
 """
 
 import base64
@@ -2134,7 +2134,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 </div>
                 <p style="font-size: 12px; opacity: 0.75; margin-top: 6px;">
                     "Bezpośrednio z appki" (zalecane) - łączy się wprost z aplikacją Spotify
-                    na tym komputerze, bez limitu zapytań. "Przez Spotify Web API" wymaga
+                    na tym komputerze, bez limitu zapytań. Wymaga nie zniminalozowanej aplikacji Spotify. "Przez Spotify Web API" wymaga
                     kluczy poniżej i może po dłuższym działaniu trafić na limit zapytań (429).
                 </p>
             </div>
