@@ -127,6 +127,39 @@ def _migrate_legacy_file(old_relative_name, new_path):
 # KONFIGURACJA I ZAPIS USTAWIEN (settings.json)
 # ============================================================
 
+# ============================================================
+# OGÓLNY (WSPÓLNY) BOT DISCORD RPC
+# ============================================================
+# Client ID aplikacji Discord, której używa KAŻDY, kto nie wpisał w
+# ustawieniach własnego Client ID. Wszyscy używający tego wspólnego ID będą
+# mieli TAKĄ SAMĄ nazwę aktywności i ikonkę appki (bo to atrybuty samej
+# aplikacji Discord, ustawiane raz w Discord Developer Portal - RPC nie
+# pozwala nadpisywać ich per-użytkownik). Okładka utworu (large_image) i
+# tak zawsze pokazuje się dynamicznie, niezależnie od tego.
+#
+# Jak to skonfigurować:
+#   1. Wejdź na https://discord.com/developers/applications, "New Application".
+#   2. Nadaj nazwę (to ona pojawi się jako "Gra w ..."/"Słucha..." u każdego,
+#      kto użyje wspólnego bota) i wgraj ikonkę appki.
+#   3. Skopiuj "APPLICATION ID" z zakładki General Information i wklej poniżej.
+#
+# Jeśli zostawisz puste, a użytkownik też nic nie wpisze w panelu -
+# Discord Rich Presence po prostu się nie połączy (tak jak dotychczas).
+SHARED_DISCORD_CLIENT_ID = "1539486874920427562"  # <-- tu wklej Client ID "ogólnego" bota
+
+def _resolve_discord_client_id(settings):
+    """Zwraca ID appki Discord do użycia, zależnie od DISCORD_MODE:
+      - "shared" (domyślnie) -> zawsze wspólny/ogólny bot, niezależnie od
+        tego, co ewentualnie zostało kiedyś wpisane w DISCORD_CLIENT_ID.
+      - "custom" -> własne ID użytkownika z DISCORD_CLIENT_ID; jeśli akurat
+        puste, awaryjnie i tak wraca do wspólnego, żeby prezencja nie
+        przestała działać w ciszy."""
+    mode = settings.get("DISCORD_MODE", "shared")
+    if mode == "custom":
+        own = (settings.get("DISCORD_CLIENT_ID") or "").strip()
+        return own or SHARED_DISCORD_CLIENT_ID
+    return SHARED_DISCORD_CLIENT_ID
+
 SETTINGS_FILE = os.path.join(APP_DATA_DIR, "settings.json")
 DEFAULT_SETTINGS = {
     "DISCORD_CLIENT_ID": "",
@@ -138,7 +171,8 @@ DEFAULT_SETTINGS = {
     "DISPLAY_MODE": "none",
     "QUEUE_COUNT": 5,
     "LYRIC_LINE_MODE": "single",
-    "SPOTIFY_MODE": "native"
+    "SPOTIFY_MODE": "native",
+    "DISCORD_MODE": "shared"
 }
 
 _migrate_legacy_file(".settings.json", SETTINGS_FILE)
@@ -165,7 +199,7 @@ def save_settings(settings):
 
 current_settings = load_settings()
 
-DISCORD_CLIENT_ID = current_settings["DISCORD_CLIENT_ID"]
+DISCORD_CLIENT_ID = _resolve_discord_client_id(current_settings)
 SPOTIFY_CLIENT_ID = current_settings["SPOTIFY_CLIENT_ID"]
 SPOTIFY_CLIENT_SECRET = current_settings["SPOTIFY_CLIENT_SECRET"]
 
@@ -192,7 +226,7 @@ POLL_INTERVAL_SECONDS = 2
 LYRIC_TICK_SECONDS = 0.25
 QUEUE_POLL_INTERVAL_SECONDS = 5
 
-WINDOW_TITLE = "AkusticSatus"
+WINDOW_TITLE = "AkusticStatus"
 WINDOW_WIDTH = 470
 WINDOW_HEIGHT = 890
 WINDOW_RESIZABLE = True
@@ -211,8 +245,10 @@ app_state = {
     "active_source": None,
     "status_discord": False,
     "status_spotify": False,
+    "status_spotify_api": "disconnected",
     "status_ytm": False,
     "status_phone": False,
+    "status_mc_mod": False,
     "presence_enabled": bool(current_settings.get("PRESENCE_ENABLED", True)),
     "lyric_offset_seconds": 0.0,
     "position_sec": 0.0,
@@ -256,6 +292,12 @@ _SPOTIFY_SCOPE = "user-read-currently-playing user-read-playback-state user-modi
 
 _spotify_tokens = None
 _spotify_backoff_until = 0.0
+# Realny status połączenia ze Spotify Web API (niezależny od tego, czy
+# Spotify jest akurat aktywnym źródłem odtwarzania):
+#   "disconnected" - tryb Web API nieużywany / brak zalogowania
+#   "connected"    - ostatnie zapytanie do API się powiodło
+#   "error"        - limit zapytań (429) albo inny błąd API
+_spotify_api_status = "disconnected"
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     received_code = None
@@ -354,14 +396,16 @@ def _spotify_auth_header():
 def _spotify_now_playing_webapi():
     """Stary tryb: odpytuje Spotify Web API (podatny na limit 429 przy
     dłuższym działaniu). Używany tylko jako fallback - patrz get_spotify_now_playing()."""
-    global _spotify_backoff_until
+    global _spotify_backoff_until, _spotify_api_status
     if _spotify_tokens is None:
         _spotify_load_tokens()
     if _spotify_tokens is None:
         _spotify_first_login()
     if not _spotify_tokens:
+        _spotify_api_status = "disconnected"
         return None
     if time.time() < _spotify_backoff_until:
+        _spotify_api_status = "error"
         return None
     _spotify_refresh_if_needed()
 
@@ -373,31 +417,38 @@ def _spotify_now_playing_webapi():
         )
     except requests.RequestException as exc:
         print(f"[spotify] Błąd połączenia przy sprawdzaniu co gra: {exc}")
+        _spotify_api_status = "error"
         return None
 
     if resp.status_code == 429:
         retry_after = resp.headers.get("Retry-After")
         wait_seconds = float(retry_after) if retry_after else 30.0
         _spotify_backoff_until = time.time() + wait_seconds
+        _spotify_api_status = "error"
         print(f"[spotify] Limit zapytań (429) - wstrzymuję na {wait_seconds:.0f}s.")
         return None
 
     if resp.status_code == 204:
+        _spotify_api_status = "connected"
         return None
     if resp.status_code != 200:
+        _spotify_api_status = "error"
         return None
     if not resp.content:
+        _spotify_api_status = "connected"
         return None
 
     data = resp.json()
     item = data.get("item")
     if not item:
+        _spotify_api_status = "connected"
         return None
 
     artists = ", ".join(a["name"] for a in item.get("artists", []))
     images = (item.get("album") or {}).get("images") or []
     cover_url = images[0]["url"] if images else None
 
+    _spotify_api_status = "connected"
     return {
         "track": item.get("name"),
         "artist": artists,
@@ -406,6 +457,41 @@ def _spotify_now_playing_webapi():
         "is_playing": data.get("is_playing", False),
         "cover_url": cover_url,
     }
+
+def _spotify_api_healthcheck():
+    """Lekkie zapytanie do Spotify Web API używane WYŁĄCZNIE do ustawienia
+    statusu pigułki 'Spotify API'. Działa niezależnie od SPOTIFY_MODE -
+    dzięki temu pigułka pokazuje prawdziwy stan połączenia nawet wtedy, gdy
+    "co gra" jest czytane trybem natywnym, a Web API jest używane tylko do
+    sterowania (play/pause/next/previous), które samo w sobie nie
+    aktualizowało wcześniej tego statusu."""
+    global _spotify_backoff_until, _spotify_api_status
+    if _spotify_tokens is None:
+        _spotify_load_tokens()
+    if not _spotify_tokens:
+        _spotify_api_status = "disconnected"
+        return
+    if time.time() < _spotify_backoff_until:
+        _spotify_api_status = "error"
+        return
+    _spotify_refresh_if_needed()
+    try:
+        resp = _session.get(
+            "https://api.spotify.com/v1/me",
+            headers={"Authorization": f"Bearer {_spotify_tokens['access_token']}"},
+            timeout=5,
+        )
+    except requests.RequestException:
+        _spotify_api_status = "error"
+        return
+
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("Retry-After")
+        wait_seconds = float(retry_after) if retry_after else 30.0
+        _spotify_backoff_until = time.time() + wait_seconds
+        _spotify_api_status = "error"
+        return
+    _spotify_api_status = "connected" if resp.status_code == 200 else "error"
 
 # ============================================================
 # NATYWNY ODCZYT "CO GRA" BEZPOŚREDNIO Z APLIKACJI SPOTIFY
@@ -1202,12 +1288,40 @@ def get_next_line(lines, pos):
 # ============================================================
 # LOKALNY SERWER DLA MODA MC
 # ============================================================
+# Wykrywanie "czy mod jest połączony" działa BIERNIE - nie wymaga żadnej
+# zmiany w modzie ani nowego portu/endpointu. Mod i tak musi regularnie
+# odpytywać GET /now-playing, żeby w ogóle pobierać dane o utworze - więc
+# wystarczy zapamiętywać moment ostatniego takiego zapytania. Jeśli było
+# "niedawno" (poniżej poniższego limitu), uznajemy moda za połączonego.
+# Dzięki temu działa to identycznie ze STARYMI wersjami moda, bo one też
+# już odpytują ten sam adres.
+# Mod odpytuje co ~250ms, więc 2 sekundy to spory zapas (8 nieudanych
+# zapytań z rzędu) na ewentualny lag/GC w Minecraft, a jednocześnie
+# pigułka reaguje na realne zamknięcie gry praktycznie od razu.
+MC_MOD_CONNECTION_TIMEOUT_SECONDS = 2.0
+
+_mc_mod_lock = threading.Lock()
+_mc_mod_last_seen = 0.0
+
+def _mark_mc_mod_seen():
+    global _mc_mod_last_seen
+    with _mc_mod_lock:
+        _mc_mod_last_seen = time.time()
+
+def is_mc_mod_connected():
+    with _mc_mod_lock:
+        last_seen = _mc_mod_last_seen
+    if last_seen <= 0:
+        return False
+    return (time.time() - last_seen) <= MC_MOD_CONNECTION_TIMEOUT_SECONDS
+
 class _NowPlayingHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.split("?")[0] != "/now-playing":
             self.send_response(404)
             self.end_headers()
             return
+        _mark_mc_mod_seen()
         payload = json.dumps(get_now_playing_snapshot()).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1345,6 +1459,8 @@ def background_loop():
     active_source = None
     consecutive_empty_polls = 0
     EMPTY_POLL_GRACE = 3
+    last_spotify_healthcheck_time = 0.0
+    SPOTIFY_HEALTHCHECK_INTERVAL_SECONDS = 20
     last_queue_poll_time = 0.0
 
     while True:
@@ -1353,9 +1469,21 @@ def background_loop():
             _update_app_state(
                 status_discord=is_discord_connected(),
                 status_phone=is_phone_app_connected(),
+                status_mc_mod=is_mc_mod_connected(),
             )
             if not is_discord_connected() and DISCORD_CLIENT_ID and int(now) % 15 == 0:
                 _reconnect_discord()
+
+            # Aktywne sprawdzanie Spotify Web API - niezależne od trybu odczytu
+            # "co gra" (native / api), żeby pigułka "Spotify API" odzwierciedlała
+            # prawdziwy stan, nawet gdy Web API jest używane tylko do sterowania.
+            # W trybie "api" nie ma potrzeby dublować - status i tak jest ustawiany
+            # na bieżąco przy każdym pollu "co gra".
+            if current_settings.get("SPOTIFY_MODE", "native") != "api":
+                if (now - last_spotify_healthcheck_time) >= SPOTIFY_HEALTHCHECK_INTERVAL_SECONDS:
+                    last_spotify_healthcheck_time = now
+                    threading.Thread(target=_spotify_api_healthcheck, daemon=True).start()
+                _update_app_state(status_spotify_api=_spotify_api_status)
 
             if snapshot is None or (now - last_poll_time) >= POLL_INTERVAL_SECONDS:
                 src, polled = get_now_playing_from_sources()
@@ -1376,6 +1504,7 @@ def background_loop():
                     status_spotify=active_source == "spotify",
                     status_ytm=active_source == "youtube",
                     active_source=active_source,
+                    status_spotify_api=_spotify_api_status,
                 )
 
             # --- Wyświetlanie następnego utworu / kolejki (tylko Spotify) ---
@@ -1779,6 +1908,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .dot-on { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow-strong); }
         .dot-off { background: #444; }
+        .dot-error { background: #ff4d4f; box-shadow: 0 0 8px rgba(255, 77, 79, 0.65); }
 
         /* Serduszka statusu (motyw Elcia) */
         .heart-icon {
@@ -1791,6 +1921,10 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .heart-off {
             color: #555;
+        }
+        .heart-error {
+            color: #ff4d4f;
+            text-shadow: 0 0 8px rgba(255, 77, 79, 0.65);
         }
 
         /* Pastylki "następny utwór / kolejka" pod sterowaniem */
@@ -2024,9 +2158,11 @@ HTML_PAGE = """<!DOCTYPE html>
             <!-- Pastylki statusów -->
             <div class="status-pills">
                 <div class="pill"><span>Spotify</span> <span id="st-spotify">🌑</span></div>
-                <div class="pill"><span>YouTube Music</span> <span id="st-ytm">🌑</span></div>
+                <div class="pill" title="Status Spotify Web API - zielony: połączono, czerwony: błąd/limit zapytań, szary: nieużywane"><span>Spotify API</span> <span id="st-spotify-api">🌑</span></div>
                 <div class="pill"><span>Telefon</span> <span id="st-phone">🌑</span></div>
                 <div class="pill"><span>Discord</span> <span id="st-discord">🌑</span></div>
+                <div class="pill"><span>YouTube Music</span> <span id="st-ytm">🌑</span></div>
+                <div class="pill"><span>Mod Minecraft</span> <span id="st-mcmod">🌑</span></div>
             </div>
 
             <!-- Discord RPC -->
@@ -2035,6 +2171,16 @@ HTML_PAGE = """<!DOCTYPE html>
                 <p>
                     <span>Status prezencji:</span>
                     <button class="small" id="presenceBtn" onclick="togglePresence()">...</button>
+                </p>
+                <p style="margin-top: 6px;">
+                    <span>Tryb prezencji:</span>
+                    <button class="small" id="discordModeBtn" onclick="toggleDiscordMode()">...</button>
+                </p>
+                <p style="font-size: 12px; opacity: 0.75; margin-top: 6px;">
+                    "WBUDOWANY" - wspólna appka dla wszystkich (ta sama nazwa aktywności i ikonka).
+                    <br><br>
+                    "WŁASNY" - używa Client ID Twojej własnej appki Discord wpisanego niżej,
+                    w sekcji "Konfiguracja API" (dzięki temu masz swoją nazwę i ikonkę).
                 </p>
             </div>
 
@@ -2134,7 +2280,9 @@ HTML_PAGE = """<!DOCTYPE html>
                 </div>
                 <p style="font-size: 12px; opacity: 0.75; margin-top: 6px;">
                     "Bezpośrednio z appki" (zalecane) - łączy się wprost z aplikacją Spotify
-                    na tym komputerze, bez limitu zapytań. Wymaga nie zniminalozowanej aplikacji Spotify. "Przez Spotify Web API" wymaga
+                    na tym komputerze, bez limitu zapytań. Wymaga nie zminimalizowanej aplikacji Spotify.
+                    <br><br>
+                    "Przez Spotify Web API" wymaga
                     kluczy poniżej i może po dłuższym działaniu trafić na limit zapytań (429).
                 </p>
             </div>
@@ -2144,7 +2292,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <h4>Konfiguracja API</h4>
                 <div class="form-group">
                     <label>Discord Client ID</label>
-                    <input type="text" id="cfg-discord" placeholder="Wpisz ID aplikacji Discord">
+                    <input type="text" id="cfg-discord" placeholder="Wpisz Client ID Discord">
                 </div>
                 <div class="form-group">
                     <label>Spotify Client ID</label>
@@ -2248,19 +2396,32 @@ HTML_PAGE = """<!DOCTYPE html>
                         document.getElementById('api-link').innerText = webUrl;
                     }
 
-                    // Pastylki statusowe: w motywie Elcia - różowe/szare serduszka,
-                    // w pozostałych motywach - neutralna kropka w kolorze motywu
+                    // Pastylki statusowe: w motywie Elcia - różowe/szare/czerwone serduszka,
+                    // w pozostałych motywach - neutralna kropka w kolorze motywu / czerwona
                     const dotOn = currentTheme === 'pink'
                         ? '<span class="heart-icon heart-on">♥</span>'
                         : '<span class="dot dot-on"></span>';
                     const dotOff = currentTheme === 'pink'
                         ? '<span class="heart-icon heart-off">♥</span>'
                         : '<span class="dot dot-off"></span>';
+                    const dotErr = currentTheme === 'pink'
+                        ? '<span class="heart-icon heart-error">♥</span>'
+                        : '<span class="dot dot-error"></span>';
 
                     document.getElementById('st-spotify').innerHTML = data.status_spotify ? dotOn : dotOff;
                     document.getElementById('st-ytm').innerHTML = data.status_ytm ? dotOn : dotOff;
                     document.getElementById('st-phone').innerHTML = data.status_phone ? dotOn : dotOff;
                     document.getElementById('st-discord').innerHTML = data.status_discord ? dotOn : dotOff;
+                    document.getElementById('st-mcmod').innerHTML = data.status_mc_mod ? dotOn : dotOff;
+
+                    // Spotify API: trzeci, "błąd" stan (limit zapytań / inny błąd)
+                    const apiStatus = data.status_spotify_api || 'disconnected';
+                    const dotApi = apiStatus === 'connected'
+                        ? dotOn
+                        : apiStatus === 'error'
+                            ? dotErr
+                            : dotOff;
+                    document.getElementById('st-spotify-api').innerHTML = dotApi;
 
                     document.getElementById('api-datadir').innerText = data.app_data_dir || '-';
 
@@ -2381,6 +2542,25 @@ HTML_PAGE = """<!DOCTYPE html>
             }).catch(err => console.log(err));
         }
 
+        // --- Tryb Discord RPC: WBUDOWANY (wspólny bot) / WŁASNY (własne ID) ---
+        let discordMode = 'shared';
+
+        function applyDiscordMode(mode) {
+            discordMode = mode;
+            document.getElementById('discordModeBtn').innerText =
+                mode === 'custom' ? 'WŁASNY' : 'WBUDOWANY';
+        }
+
+        function toggleDiscordMode() {
+            const next = discordMode === 'custom' ? 'shared' : 'custom';
+            applyDiscordMode(next);
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ DISCORD_MODE: next })
+            }).catch(err => console.log(err));
+        }
+
         function openDataFolder() {
             fetch('/open-data-folder').catch(err => console.log(err));
         }
@@ -2417,6 +2597,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     applyLyricLineModeButtons(lyricLineMode);
 
                     applySpotifyMode(cfg.SPOTIFY_MODE || 'native');
+                    applyDiscordMode(cfg.DISCORD_MODE || 'shared');
                 })
                 .catch(err => console.log(err));
         }
@@ -2630,7 +2811,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                 current_settings.update(new_settings)
                 save_settings(current_settings)
                 
-                DISCORD_CLIENT_ID = current_settings.get("DISCORD_CLIENT_ID", DISCORD_CLIENT_ID)
+                DISCORD_CLIENT_ID = _resolve_discord_client_id(current_settings)
                 SPOTIFY_CLIENT_ID = current_settings.get("SPOTIFY_CLIENT_ID", SPOTIFY_CLIENT_ID)
                 SPOTIFY_CLIENT_SECRET = current_settings.get("SPOTIFY_CLIENT_SECRET", SPOTIFY_CLIENT_SECRET)
 
@@ -2641,6 +2822,11 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     discord_close()
                     if DISCORD_CLIENT_ID:
                         threading.Thread(target=_reconnect_discord, daemon=True).start()
+
+                if "SPOTIFY_MODE" in new_settings:
+                    # Tryb Spotify się zmienił - od razu odświeżamy pigułkę
+                    # "Spotify API" zamiast czekać do 20s na kolejny cykl.
+                    threading.Thread(target=_spotify_api_healthcheck, daemon=True).start()
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json; charset=utf-8")
@@ -2711,6 +2897,7 @@ if __name__ == "__main__":
         print("[discord] Brak DISCORD_CLIENT_ID w ustawieniach - pomijam łączenie z Discordem.")
 
     threading.Thread(target=background_loop, daemon=True).start()
+    threading.Thread(target=_spotify_api_healthcheck, daemon=True).start()
     _start_command_listener_if_possible()
     _start_now_playing_http_server()
     _start_phone_receiver_http_server()
