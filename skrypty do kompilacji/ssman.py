@@ -262,12 +262,21 @@ def _update_app_state(**kwargs):
 
 def get_now_playing_snapshot():
     with state_lock:
+        duration = app_state["duration_sec"]
+        position = app_state["position_sec"]
         return {
             "track": app_state["track"],
             "artist": app_state["artist"],
             "line": app_state["line"],
             "is_playing": app_state["is_playing"],
             "cover_url": app_state["cover_url"],
+            # Dodane niżej: nowe pola dla moda MC (np. pasek/postęp utworu,
+            # albo mini-wyświetlacz "co gra" bez tekstu). Stare wersje moda,
+            # które o nich nie wiedzą, po prostu je zignorują - JSON nie
+            # przestaje być poprawny przez dodatkowe, nieznane pola.
+            "position_sec": position,
+            "duration_sec": duration,
+            "remaining_sec": max(0.0, duration - position) if duration else 0.0,
         }
 
 _session = requests.Session()
@@ -1236,8 +1245,8 @@ def get_current_line(lines, pos):
 # Ile sekund musi minąć od ostatniej zaśpiewanej linijki (albo od jej
 # rozpoczęcia, gdy nie wiemy kiedy się kończy - patrz niżej), zanim uznamy,
 # że nie ma teraz aktywnego tekstu (np. solówka, przejście instrumentalne,
-# outro) i zamiast "zamrożonej" starej linijki pokażemy "🎵 Muzyka".
-LYRIC_GAP_THRESHOLD_SECONDS = 7.0
+# outro) i zamiast "zamrożonej" starej linijki pokażemy "🎵 Muzyka 🎵".
+LYRIC_GAP_THRESHOLD_SECONDS = 5.5
 
 def get_current_line_info(lines, pos):
     """Zwraca (tekst_aktualnej_linijki_albo_None, czy_to_przerwa_muzyczna).
@@ -1385,7 +1394,7 @@ def discord_update(track, artist, current_line, cover_url=None):
         return
     track_artist = f"{track} - {artist}" if artist else track
     kwargs = {
-        "details": _truncate(current_line, "🎵 Muzyka"),
+        "details": _truncate(current_line, "🎵 Muzyka 🎵"),
         "state": _truncate(track_artist, ""),
         "start": _rpc_start_time,
     }
@@ -1574,7 +1583,7 @@ def background_loop():
                     # Piosenka ma tekst, ale w tym momencie nie ma żadnej
                     # aktywnej linijki - np. intro, solówka, przejście
                     # instrumentalne albo outro po ostatniej linijce tekstu.
-                    line_for_display = "🎵 Muzyka"
+                    line_for_display = "🎵 Muzyka 🎵"
                 else:
                     line_for_display = current_line
                 next_line_text = get_next_line(current_lines, lookup_position)
@@ -1582,7 +1591,7 @@ def background_loop():
             else:
                 # Nie udało się w ogóle znaleźć/zsynchronizować tekstu dla tego utworu
                 current_line = None
-                line_for_display = "🎵 (Brak zsynchronizowanego tekstu)"
+                line_for_display = "🎵 (Brak zsynchronizowanego tekstu) 🎵"
 
             _update_app_state(
                 track=track,
